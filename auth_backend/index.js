@@ -1,60 +1,64 @@
 const express = require("express");
+const cookieParser = require("cookie-parser");
+const jose = require("jose");
 const conn = require("./database/connection");
 const cors = require("cors");
+const checkAuth = require("./authCheck");
 const app = express();
 const PORT = 8000;
 
+app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(
   cors({
     origin: ["http://localhost:3000"],
+    credentials: true,
   })
 );
 
 // Login
 app.use("/login", (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password)
-    res.status(400).send("username and password is required!");
+
   const SQLQuery = `SELECT * FROM  users WHERE name='${username}'`;
-  conn.query(SQLQuery, (err, result) => {
-    if (err) {
+  conn.query(SQLQuery, async (err, result) => {
+    if (err || result.length == 0) {
       console.log("Error: ", err);
+      return res.json({ message: "No user Found!" });
     }
     if (result[0].password === password) {
-      const token = "THisMaybeJWTtoken";
-      var inOneMinutes = new Date(new Date().getTime() + 1 * 60 * 1000);
+      // Create Jose TOKEN
+      const joseToken = await new jose.SignJWT({ username: username })
+        .setProtectedHeader({ alg: "HS256" })
+        .setIssuedAt()
+        .setExpirationTime("1d")
+        .sign(new TextEncoder().encode("rakib_sycret_key"));
+
+      // Set timer 5 min
+      var tokenTime = new Date(new Date().getTime() + 5 * 60 * 1000);
       const options = {
-        expires: inOneMinutes,
+        expires: tokenTime,
         httpOnly: true,
         secure: true,
       };
-      res.cookie("token", token, options);
-      res.json({ status: "OK", message: "Login Success!" });
+
+      // Set cookie
+      res.cookie("access_token", joseToken, options);
+      res.json({
+        status: "OK",
+        message: "Login Success!",
+        data: { username },
+      });
     } else {
-      res.send("Password is wrong!");
+      return res.send("Password is wrong!");
     }
   });
 });
 
-// CHECK TOKEN
-const verifyToken = async (req, res, next) => {
-  const token = req.cookies.token || "";
-  try {
-    if (!token) {
-      return res.status(401).json("You need to Login");
-    }
-    const decrypt = await jwt.verify(token, process.env.JWT_SECRET);
-    req.user = {
-      id: decrypt.id,
-      firstname: decrypt.firstname,
-    };
-    next();
-  } catch (err) {
-    return res.status(500).json(err.toString());
-  }
-};
+app.use("/post", checkAuth, (req, res) => {
+  res.send("Here There");
+});
 
 app.listen(PORT, () => {
   console.log(`Server is runnig on http://localhost:${PORT}`);
